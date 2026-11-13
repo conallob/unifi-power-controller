@@ -62,15 +62,22 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 
 	v, c, d := version.Fields()
+	ctl := power.New(client, cfg.UniFi.Site, cfg.PowerTargets(), power.WithMinOffTime(*cfg.MinOffTime))
+	m := metrics.New(metrics.Config{
+		Info:   metrics.Info{Version: v, Commit: c, Date: d},
+		Nodes:  ctl.Targets(),
+		States: ctl,
+	})
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: server.New(server.Options{
-			Power:         power.New(client, cfg.UniFi.Site, cfg.PowerTargets(), power.WithMinOffTime(*cfg.MinOffTime)),
+			Power:         ctl,
 			Logger:        log,
 			SHA256Secrets: cfg.RPC.SHA256Secrets,
 			SHA512Secrets: cfg.RPC.SHA512Secrets,
 			SignedHeaders: cfg.RPC.SignedHeaders,
-			Metrics:       metrics.Handler(metrics.NewRegistry(metrics.Info{Version: v, Commit: c, Date: d})),
+			Metrics:       m.Handler(),
+			Recorder:      m,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

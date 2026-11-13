@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +26,16 @@ type State string
 const (
 	StateOn  State = "on"
 	StateOff State = "off"
+	// StateUnknown means the switch could not be queried.
+	StateUnknown State = "unknown"
 )
+
+// NodeState is one node's power state as of a Snapshot.
+type NodeState struct {
+	Node      string
+	SwitchMAC string
+	State     State
+}
 
 // ErrUnknownNode is returned for a node name that is not configured.
 var ErrUnknownNode = errors.New("unknown node")
@@ -119,6 +129,47 @@ func (c *Controller) Nodes() []string {
 		names = append(names, n)
 	}
 	return names
+}
+
+// Snapshot returns the power state of every configured node, in name order.
+// Each switch is queried once however many nodes it hosts. A switch that cannot
+// be queried yields StateUnknown for its nodes rather than failing the whole
+// snapshot.
+func (c *Controller) Snapshot(ctx context.Context) []NodeState {
+	names := c.Nodes()
+	sort.Strings(names)
+
+	devices := map[string]*unifi.Device{} // by switch MAC; nil = query failed
+	out := make([]NodeState, 0, len(names))
+	for _, n := range names {
+		t := c.nodes[n]
+		dev, seen := devices[t.SwitchMAC]
+		if !seen {
+			d, err := c.api.GetDeviceByMAC(ctx, c.site, t.SwitchMAC)
+			if err != nil {
+				d = nil
+			}
+			devices[t.SwitchMAC], dev = d, d
+		}
+		st := StateUnknown
+		if dev != nil {
+			st = StateOn
+			if effectiveMode(dev, t.Port) == poeOff {
+				st = StateOff
+			}
+		}
+		out = append(out, NodeState{Node: n, SwitchMAC: t.SwitchMAC, State: st})
+	}
+	return out
+}
+
+// Targets returns a copy of the node→port mapping.
+func (c *Controller) Targets() map[string]Target {
+	m := make(map[string]Target, len(c.nodes))
+	for k, v := range c.nodes {
+		m[k] = v
+	}
+	return m
 }
 
 func (c *Controller) target(node string) (Target, error) {

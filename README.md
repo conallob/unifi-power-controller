@@ -16,7 +16,7 @@ Written in Go on top of
 | `GET /nodes/{name}/power` | `{"state":"on\|off"}` |
 | `POST /rpc` | bmclib/Rufio `rpc` provider (HMAC-signed); see [docs/tinkerbell.md](docs/tinkerbell.md) |
 | `GET /healthz` | Liveness/readiness |
-| `GET /metrics` | Prometheus metrics (Go runtime, process, and `unifi_power_controller_build_info`) |
+| `GET /metrics` | Prometheus metrics: build info, nodes configured, node power state, request counters ([details](#metrics)) |
 
 ## Quick start
 
@@ -70,22 +70,55 @@ unifi-power-controller -version
 # unifi-power-controller 0.1.0 (commit 1a2b3c4..., built 2026-11-13T12:00:00Z, go1.27.4)
 ```
 
-The version is also logged at startup and exported as the labels of a constant-1 gauge on
-`/metrics`:
+The version is also logged at startup and exported as a metric (see below). Unstamped builds
+(`go run`, `go install`) fall back to the toolchain's embedded build info. To try a release
+locally without publishing: `goreleaser release --snapshot --clean --skip=publish`.
 
-```
-unifi_power_controller_build_info{commit="1a2b3c4...",date="2026-11-13T12:00:00Z",goversion="go1.27.4",version="0.1.0"} 1
-```
+## Metrics
 
-so you can alert on version skew or attach the version to other series:
+`GET /metrics` serves Prometheus metrics (plus the standard Go runtime and process metrics).
+All label values come from fixed sets (configured node names, known RPC methods and actions),
+never from request input, so cardinality stays bounded however much junk is sent.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `unifi_power_controller_build_info` | gauge (always 1) | `version`, `commit`, `date`, `goversion` | What is running |
+| `unifi_power_controller_nodes_configured` | gauge | `switch` (MAC) | Nodes configured per switch |
+| `unifi_power_controller_node_power_state` | gauge (state set) | `node`, `switch`, `state=on\|off\|unknown` | Exactly one `state` is 1 per node; `unknown` = the switch couldn't be queried |
+| `unifi_power_controller_rpc_requests_total` | counter | `method`, `result=ok\|error\|unauthorized\|bad_request` | `POST /rpc` requests from Rufio/bmclib; unrecognised methods are `method="unknown"` |
+| `unifi_power_controller_power_actions_total` | counter | `node`, `action=on\|off\|cycle` | Every PoE change requested via REST **or** RPC (`reset` counts as `cycle`), failed or not; unconfigured nodes are `node="unknown"` |
+| `unifi_power_controller_power_action_errors_total` | counter | `node`, `action` | The subset of those that failed on the UniFi call. Requests for unconfigured nodes are attempts, not errors |
+
+Counters are created at 0 for every configured node, so `increase()`/`rate()` work from the first
+event. `node_power_state` is computed at scrape time with one UniFi API call per switch, cached for
+5s so scrape frequency can't turn into controller load.
 
 ```promql
+# Version rolled out across instances; join onto other series
 up{job="unifi-power-controller"} * on(instance) group_left(version) unifi_power_controller_build_info
+
+# Nodes by state
+sum by (state) (unifi_power_controller_node_power_state)
+
+# Node PoE is off (alert with a `for:` that suits you), or the switch is unreachable
+unifi_power_controller_node_power_state{state="off"} == 1
+unifi_power_controller_node_power_state{state="unknown"} == 1
+
+# A node being power-cycled repeatedly is usually a sign of something wrong
+increase(unifi_power_controller_power_actions_total{action="cycle"}[1h]) > 3
+
+# RPC traffic from Tinkerbell, by method and result
+sum by (method, result) (rate(unifi_power_controller_rpc_requests_total[5m]))
+
+# Nodes with failed PoE changes
+sum by (node) (increase(unifi_power_controller_power_action_errors_total[15m])) > 0
+
+# Overall failure ratio
+  sum(rate(unifi_power_controller_power_action_errors_total[15m]))
+/ sum(rate(unifi_power_controller_power_actions_total{node!="unknown"}[15m]))
 ```
 
-`/metrics` is unauthenticated; like the rest of the service, keep it on a `ClusterIP`. Unstamped builds (`go run`, `go install`) fall back
-to the toolchain's embedded build info. To try a release locally without publishing:
-`goreleaser release --snapshot --clean --skip=publish`.
+`/metrics` is unauthenticated; like the rest of the service, keep it on a `ClusterIP`.
 
 ## Development
 

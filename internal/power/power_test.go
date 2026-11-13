@@ -215,3 +215,48 @@ func TestMinOffTimeHonoursContextCancel(t *testing.T) {
 		t.Fatal("port must stay off when the wait is cancelled")
 	}
 }
+
+type multiAPI struct {
+	devs  map[string]*unifi.Device
+	calls map[string]int
+}
+
+func (m *multiAPI) GetDeviceByMAC(_ context.Context, _, mac string) (*unifi.Device, error) {
+	m.calls[mac]++
+	d, ok := m.devs[mac]
+	if !ok {
+		return nil, errors.New("unreachable")
+	}
+	return d, nil
+}
+func (m *multiAPI) UpdateDevice(context.Context, string, *unifi.Device) (*unifi.Device, error) {
+	return nil, errors.New("not used")
+}
+func (m *multiAPI) ExecuteCmd(context.Context, string, string, unifi.Cmd) (any, error) {
+	return nil, errors.New("not used")
+}
+
+func TestSnapshot(t *testing.T) {
+	api := &multiAPI{calls: map[string]int{}, devs: map[string]*unifi.Device{
+		"aa": {PortOverrides: []unifi.DevicePortOverrides{{PortIDX: i64(2), PoeMode: "off"}}},
+		// "bb" is deliberately missing: that switch is unreachable.
+	}}
+	c := New(api, "default", map[string]Target{
+		"n1": {SwitchMAC: "aa", Port: 1},
+		"n2": {SwitchMAC: "aa", Port: 2},
+		"n3": {SwitchMAC: "bb", Port: 1},
+	})
+	got := c.Snapshot(context.Background())
+	want := []NodeState{{"n1", "aa", StateOn}, {"n2", "aa", StateOff}, {"n3", "bb", StateUnknown}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v want %+v", i, got[i], want[i])
+		}
+	}
+	if api.calls["aa"] != 1 || api.calls["bb"] != 1 {
+		t.Errorf("each switch must be queried once, calls = %v", api.calls)
+	}
+}

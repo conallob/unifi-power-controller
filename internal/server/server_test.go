@@ -201,3 +201,61 @@ func TestMetricsRoute(t *testing.T) {
 		t.Fatal("POST /metrics must not be served")
 	}
 }
+
+type recEvent struct{ kind, a, b, c string }
+
+type fakeRec struct{ events []recEvent }
+
+func (f *fakeRec) RPC(method, result string) {
+	f.events = append(f.events, recEvent{"rpc", method, result, ""})
+}
+func (f *fakeRec) Action(node, action, result string) {
+	f.events = append(f.events, recEvent{"action", node, action, result})
+}
+
+func TestRecorder(t *testing.T) {
+	r := &fakeRec{}
+	f := &fakePower{state: power.StateOn}
+	h := New(Options{Power: f, Recorder: r, SHA256Secrets: []string{"s"}})
+
+	sig := func(body string) map[string]string {
+		return map[string]string{"X-BMCLIB-Signature-256": sign(body, "", "s")}
+	}
+	call := func(body string) { do(h, "POST", "/rpc", body, sig(body)) }
+
+	// REST path counts actions, including failures and unknown nodes; rejects aren't actions.
+	do(h, "POST", "/nodes/n1/power", `{"action":"cycle"}`, nil)
+	do(h, "POST", "/nodes/ghost/power", `{"action":"on"}`, nil)
+	do(h, "POST", "/nodes/n1/power", `{"action":"explode"}`, nil)
+	f.err = errors.New("controller down")
+	do(h, "POST", "/nodes/n1/power", `{"action":"off"}`, nil)
+	f.err = nil
+
+	// RPC path: setPowerState maps onto the same actions; reset counts as cycle.
+	call(`{"id":1,"host":"n1","method":"setPowerState","params":{"state":"reset"}}`)
+	call(`{"id":1,"host":"n1","method":"getPowerState"}`)
+	call(`{"id":1,"host":"n1","method":"setPowerState","params":{"state":"soft"}}`)
+	call(`{"id":1,"host":"n1","method":"bogus"}`)
+	do(h, "POST", "/rpc", `{"id":1,"host":"n1","method":"ping"}`, nil) // unsigned
+	do(h, "POST", "/rpc", `garbage`, sig(`garbage`))
+
+	want := []recEvent{
+		{"action", "n1", "cycle", "success"},
+		{"action", "ghost", "on", "unknown_node"},
+		{"action", "n1", "off", "error"},
+		{"action", "n1", "cycle", "success"}, {"rpc", "setPowerState", "ok", ""},
+		{"rpc", "getPowerState", "ok", ""},
+		{"rpc", "setPowerState", "error", ""}, // soft: unsupported, no action attempted
+		{"rpc", "bogus", "error", ""},
+		{"rpc", "unknown", "unauthorized", ""},
+		{"rpc", "unknown", "bad_request", ""},
+	}
+	if len(r.events) != len(want) {
+		t.Fatalf("events:\n got %v\nwant %v", r.events, want)
+	}
+	for i := range want {
+		if r.events[i] != want[i] {
+			t.Errorf("event %d = %+v want %+v", i, r.events[i], want[i])
+		}
+	}
+}
