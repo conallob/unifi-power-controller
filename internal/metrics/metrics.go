@@ -59,9 +59,10 @@ var (
 type Metrics struct {
 	Registry *prometheus.Registry
 
-	rpc     *prometheus.CounterVec
-	actions *prometheus.CounterVec
-	known   map[string]bool
+	rpc          *prometheus.CounterVec
+	actions      *prometheus.CounterVec
+	actionErrors *prometheus.CounterVec
+	known        map[string]bool
 }
 
 // New builds a registry with the Go runtime and process collectors, build_info,
@@ -78,9 +79,14 @@ func New(cfg Config) *Metrics {
 		actions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace, Name: "power_actions_total",
 			Help: "PoE power actions requested for a node, from either the REST API or RPC, " +
-				"by action (on, off, cycle) and result (success, error, unknown_node). " +
-				"Unconfigured node names are counted as node=\"unknown\".",
-		}, []string{"node", "action", "result"}),
+				"by action (on, off, cycle). Every attempt is counted, including failures and requests for " +
+				"unconfigured nodes (node=\"unknown\").",
+		}, []string{"node", "action"}),
+		actionErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace, Name: "power_action_errors_total",
+			Help: "PoE power actions that failed because the UniFi controller call failed, by action. " +
+				"A subset of power_actions_total; requests for unconfigured nodes are not errors here.",
+		}, []string{"node", "action"}),
 	}
 
 	perSwitch := map[string]int{}
@@ -88,15 +94,13 @@ func New(cfg Config) *Metrics {
 		m.known[name] = true
 		perSwitch[t.SwitchMAC]++
 		for _, a := range actions {
-			for _, r := range []string{"success", "error"} {
-				m.actions.WithLabelValues(name, a, r) // pre-create at 0 so rate()/increase() work from the first event
-			}
+			// Pre-create at 0 so rate()/increase() work from the first event.
+			m.actions.WithLabelValues(name, a)
+			m.actionErrors.WithLabelValues(name, a)
 		}
 	}
 	for _, a := range actions {
-		for _, r := range []string{"success", "error", "unknown_node"} {
-			m.actions.WithLabelValues("unknown", a, r)
-		}
+		m.actions.WithLabelValues("unknown", a)
 	}
 	for _, meth := range rpcMethods {
 		for _, r := range []string{"ok", "error"} {
@@ -132,7 +136,7 @@ func New(cfg Config) *Metrics {
 				"goversion": runtime.Version(),
 			},
 		}, func() float64 { return 1 }),
-		m.rpc, m.actions, sc,
+		m.rpc, m.actions, m.actionErrors, sc,
 	)
 	return m
 }
@@ -151,13 +155,18 @@ func (m *Metrics) RPC(method, result string) {
 	m.rpc.WithLabelValues(method, result).Inc()
 }
 
-// Action records one PoE power action. Nodes that are not configured are
-// recorded as "unknown".
+// Action records one PoE power action with its outcome (success, error or
+// unknown_node). Every call counts toward power_actions_total; only "error"
+// (a failed controller call) counts toward power_action_errors_total. Nodes
+// that are not configured are recorded as "unknown".
 func (m *Metrics) Action(node, action, result string) {
 	if !m.known[node] {
 		node = "unknown"
 	}
-	m.actions.WithLabelValues(node, action, result).Inc()
+	m.actions.WithLabelValues(node, action).Inc()
+	if result == "error" {
+		m.actionErrors.WithLabelValues(node, action).Inc()
+	}
 }
 
 // stateCollector computes node_power_state and nodes_configured at scrape

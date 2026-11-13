@@ -86,7 +86,8 @@ never from request input, so cardinality stays bounded however much junk is sent
 | `unifi_power_controller_nodes_configured` | gauge | `switch` (MAC) | Nodes configured per switch |
 | `unifi_power_controller_node_power_state` | gauge (state set) | `node`, `switch`, `state=on\|off\|unknown` | Exactly one `state` is 1 per node; `unknown` = the switch couldn't be queried |
 | `unifi_power_controller_rpc_requests_total` | counter | `method`, `result=ok\|error\|unauthorized\|bad_request` | `POST /rpc` requests from Rufio/bmclib; unrecognised methods are `method="unknown"` |
-| `unifi_power_controller_power_actions_total` | counter | `node`, `action=on\|off\|cycle`, `result=success\|error\|unknown_node` | PoE changes requested via REST **or** RPC (`reset` counts as `cycle`); unconfigured nodes are `node="unknown"` |
+| `unifi_power_controller_power_actions_total` | counter | `node`, `action=on\|off\|cycle` | Every PoE change requested via REST **or** RPC (`reset` counts as `cycle`), failed or not; unconfigured nodes are `node="unknown"` |
+| `unifi_power_controller_power_action_errors_total` | counter | `node`, `action` | The subset of those that failed on the UniFi call. Requests for unconfigured nodes are attempts, not errors |
 
 Counters are created at 0 for every configured node, so `increase()`/`rate()` work from the first
 event. `node_power_state` is computed at scrape time with one UniFi API call per switch, cached for
@@ -104,13 +105,15 @@ unifi_power_controller_node_power_state{state="off"} == 1
 unifi_power_controller_node_power_state{state="unknown"} == 1
 
 # A node being power-cycled repeatedly is usually a sign of something wrong
-increase(unifi_power_controller_power_actions_total{action="cycle",result="success"}[1h]) > 3
+increase(unifi_power_controller_power_actions_total{action="cycle"}[1h]) > 3
 
 # RPC traffic from Tinkerbell, by method and result
 sum by (method, result) (rate(unifi_power_controller_rpc_requests_total[5m]))
 
-# Failed PoE changes
-sum by (node) (increase(unifi_power_controller_power_actions_total{result="error"}[15m])) > 0
+# Failed PoE changes, and the failure ratio
+sum by (node) (increase(unifi_power_controller_power_action_errors_total[15m])) > 0
+  sum(rate(unifi_power_controller_power_action_errors_total[15m]))
+/ sum(rate(unifi_power_controller_power_actions_total{node!="unknown"}[15m]))
 ```
 
 `/metrics` is unauthenticated; like the rest of the service, keep it on a `ClusterIP`.

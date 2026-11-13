@@ -113,10 +113,12 @@ func TestCountersAndBoundedLabels(t *testing.T) {
 		got, want float64
 		what      string
 	}{
-		{testutil.ToFloat64(m.actions.WithLabelValues("n1", "cycle", "success")), 2, "n1 cycle success"},
-		{testutil.ToFloat64(m.actions.WithLabelValues("n1", "off", "error")), 1, "n1 off error"},
-		{testutil.ToFloat64(m.actions.WithLabelValues("n2", "on", "success")), 0, "n2 on success (pre-created at 0)"},
-		{testutil.ToFloat64(m.actions.WithLabelValues("unknown", "on", "unknown_node")), 2, "unknown node bucket"},
+		{testutil.ToFloat64(m.actions.WithLabelValues("n1", "cycle")), 2, "n1 cycle attempts"},
+		{testutil.ToFloat64(m.actions.WithLabelValues("n1", "off")), 1, "n1 off attempts (a failed attempt still counts)"},
+		{testutil.ToFloat64(m.actionErrors.WithLabelValues("n1", "off")), 1, "n1 off errors"},
+		{testutil.ToFloat64(m.actionErrors.WithLabelValues("n1", "cycle")), 0, "n1 cycle errors (successes are not errors)"},
+		{testutil.ToFloat64(m.actions.WithLabelValues("n2", "on")), 0, "n2 on (pre-created at 0)"},
+		{testutil.ToFloat64(m.actions.WithLabelValues("unknown", "on")), 2, "unknown node bucket"},
 		{testutil.ToFloat64(m.rpc.WithLabelValues("setPowerState", "ok")), 2, "setPowerState ok"},
 		{testutil.ToFloat64(m.rpc.WithLabelValues("getPowerState", "error")), 1, "getPowerState error"},
 		{testutil.ToFloat64(m.rpc.WithLabelValues("unknown", "bad_request")), 2, "unknown method bucket"},
@@ -126,10 +128,18 @@ func TestCountersAndBoundedLabels(t *testing.T) {
 		}
 	}
 
-	// Junk input must not have created new series: 3 nodes x 3 actions x 2
-	// results + 3 actions x 3 results for "unknown".
-	if n := testutil.CollectAndCount(m.actions); n != 3*3*2+3*3 {
-		t.Errorf("power_actions_total series = %d, want %d", n, 3*3*2+3*3)
+	// Unknown-node requests are attempts but not errors.
+	if n := testutil.ToFloat64(m.actionErrors.WithLabelValues("n1", "on")); n != 0 {
+		t.Errorf("unexpected error count %v", n)
+	}
+
+	// Junk input must not have created new series: (3 nodes + "unknown") x 3
+	// actions attempts, 3 nodes x 3 actions errors.
+	if n := testutil.CollectAndCount(m.actions); n != 4*3 {
+		t.Errorf("power_actions_total series = %d, want %d", n, 4*3)
+	}
+	if n := testutil.CollectAndCount(m.actionErrors); n != 3*3 {
+		t.Errorf("power_action_errors_total series = %d, want %d", n, 3*3)
 	}
 	if n := testutil.CollectAndCount(m.rpc); n != 4*2+3 {
 		t.Errorf("rpc_requests_total series = %d, want %d", n, 4*2+3)
