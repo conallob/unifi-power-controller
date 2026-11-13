@@ -43,6 +43,9 @@ type Options struct {
 	SHA256Secrets []string
 	SHA512Secrets []string
 	SignedHeaders []string
+
+	// Metrics, if set, is served at GET /metrics.
+	Metrics http.Handler
 }
 
 // Server is an http.Handler.
@@ -64,6 +67,9 @@ func New(o Options) *Server {
 	s.mux.HandleFunc("GET /nodes/{name}/power", s.getPower)
 	s.mux.HandleFunc("POST /nodes/{name}/power", s.postPower)
 	s.mux.HandleFunc("POST /rpc", s.rpc)
+	if o.Metrics != nil {
+		s.mux.Handle("GET /metrics", o.Metrics)
+	}
 	return s
 }
 

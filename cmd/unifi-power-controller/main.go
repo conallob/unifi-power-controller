@@ -16,6 +16,7 @@ import (
 	"github.com/ubiquiti-community/go-unifi/unifi"
 
 	"github.com/conallob/unifi-power-controller/internal/config"
+	"github.com/conallob/unifi-power-controller/internal/metrics"
 	"github.com/conallob/unifi-power-controller/internal/power"
 	"github.com/conallob/unifi-power-controller/internal/server"
 	"github.com/conallob/unifi-power-controller/internal/version"
@@ -60,6 +61,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		return err
 	}
 
+	v, c, d := version.Fields()
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: server.New(server.Options{
@@ -68,6 +70,7 @@ func run(cfgPath string, log *slog.Logger) error {
 			SHA256Secrets: cfg.RPC.SHA256Secrets,
 			SHA512Secrets: cfg.RPC.SHA512Secrets,
 			SignedHeaders: cfg.RPC.SignedHeaders,
+			Metrics:       metrics.Handler(metrics.NewRegistry(metrics.Info{Version: v, Commit: c, Date: d})),
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

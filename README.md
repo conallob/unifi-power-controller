@@ -16,6 +16,7 @@ Written in Go on top of
 | `GET /nodes/{name}/power` | `{"state":"on\|off"}` |
 | `POST /rpc` | bmclib/Rufio `rpc` provider (HMAC-signed); see [docs/tinkerbell.md](docs/tinkerbell.md) |
 | `GET /healthz` | Liveness/readiness |
+| `GET /metrics` | Prometheus metrics (Go runtime, process, and `unifi_power_controller_build_info`) |
 
 ## Quick start
 
@@ -69,7 +70,20 @@ unifi-power-controller -version
 # unifi-power-controller 0.1.0 (commit 1a2b3c4..., built 2026-11-13T12:00:00Z, go1.27.4)
 ```
 
-The version is also logged at startup. Unstamped builds (`go run`, `go install`) fall back
+The version is also logged at startup and exported as the labels of a constant-1 gauge on
+`/metrics`:
+
+```
+unifi_power_controller_build_info{commit="1a2b3c4...",date="2026-11-13T12:00:00Z",goversion="go1.27.4",version="0.1.0"} 1
+```
+
+so you can alert on version skew or attach the version to other series:
+
+```promql
+up{job="unifi-power-controller"} * on(instance) group_left(version) unifi_power_controller_build_info
+```
+
+`/metrics` is unauthenticated; like the rest of the service, keep it on a `ClusterIP`. Unstamped builds (`go run`, `go install`) fall back
 to the toolchain's embedded build info. To try a release locally without publishing:
 `goreleaser release --snapshot --clean --skip=publish`.
 

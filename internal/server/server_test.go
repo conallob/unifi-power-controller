@@ -185,3 +185,19 @@ func TestRPCSignature(t *testing.T) {
 		t.Fatalf("altered timestamp code %d", rr.Code)
 	}
 }
+
+func TestMetricsRoute(t *testing.T) {
+	// Not mounted unless configured.
+	if rr := do(New(Options{Power: &fakePower{}}), "GET", "/metrics", "", nil); rr.Code != 404 {
+		t.Fatalf("unconfigured /metrics code %d, want 404", rr.Code)
+	}
+	h := New(Options{Power: &fakePower{}, Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})})
+	if rr := do(h, "GET", "/metrics", "", nil); rr.Code != 200 || rr.Body.String() != "ok" {
+		t.Fatalf("/metrics: %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := do(h, "POST", "/metrics", "", nil); rr.Code == 200 {
+		t.Fatal("POST /metrics must not be served")
+	}
+}
