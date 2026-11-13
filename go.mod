@@ -1,6 +1,6 @@
 module github.com/conallob/unifi-power-controller
 
-go 1.25.0
+go 1.27.4
 
 require (
 	github.com/ubiquiti-community/go-unifi v1.43.2
