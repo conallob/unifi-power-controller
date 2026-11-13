@@ -6,9 +6,7 @@ Switches a node's PoE port **on**, **off**, or **cycles** it, and plugs into
 power management of nodes that have no BMC.
 
 Written in Go on top of
-[ubiquiti-community/go-unifi](https://github.com/ubiquiti-community/go-unifi).
-It is intended to replace the embedded Python script in
-[`homelab-apps/apps/node-power`](https://github.com/conallob/homelab-apps/pull/24).
+[ubiquiti-community/go-unifi](https://github.com/ubiquiti-community/go-unifi)
 
 ## Interfaces
 
