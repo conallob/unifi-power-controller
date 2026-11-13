@@ -108,8 +108,8 @@ spec:
     providerOptions:
       rpc:
         consumerURL: http://unifi-power-controller.unifi-power.svc.cluster.local/rpc
-        # signature:
-        #   includedPayloadHeaders: ["X-BMCLIB-Timestamp"]   # and signedHeaders: in our config
+        # No signature: block needed. Rufio ignores one even if you set it --
+        # see the note below the next example.
         hmac:
           secrets:
             sha256:
@@ -137,6 +137,17 @@ A Workflow that sets `bootOptions.bootMode: netboot` (with
 `toggleAllowNetboot: true`) now makes the Tinkerbell controller create a Rufio
 Job that runs **off → one-time PXE boot → on** against that Machine; the
 service turns those into PoE off, a no-op acknowledgement, and PoE on.
+
+**On the HMAC signature itself:** Rufio does not use bmclib's generic `rpc`
+provider defaults. It hardcodes its own header names and payload
+(`rufio/internal/controller/client.go`'s `translateRPC`, merged over any
+`providerOptions.rpc.signature`/`request` you set with `mergo.WithOverride`
+-- so a Machine spec cannot opt back into bmclib's own scheme):
+`X-Rufio-Signature-{256,512}` instead of `X-BMCLIB-Signature-{256,512}`, and
+the signed payload is the body followed by the raw value of a
+`X-Rufio-Timestamp` header it always adds. This service verifies both that
+scheme and vanilla bmclib's (for direct, non-Rufio callers) automatically --
+nothing to configure.
 
 ### Tinkerbell with `v1alpha2` (BMC inline in `Hardware`)
 
@@ -188,9 +199,13 @@ curl -s localhost:8080/rpc -d '{"id":1,"host":"lab-node-1","method":"getPowerSta
 
 ## Troubleshooting
 
-* **`ping` fails when Rufio opens the Machine** — check `consumerURL` is
-  reachable from the Rufio pod and that the HMAC secret matches (401 in the
-  service log: `rpc: bad or missing signature`).
+* **`ping` fails when Rufio opens the Machine, 401 / `rpc: bad or missing
+  signature`** — check `consumerURL` is reachable from the Rufio pod and
+  that the HMAC secret (the literal `data.secret`/`stringData.secret` value,
+  not the Secret's name) matches on both sides. This service verifies both
+  Rufio's real header scheme and vanilla bmclib's automatically (see above),
+  so a 401 here almost always means the secret itself is wrong or missing,
+  not a header-naming mismatch.
 * **`unknown node "…"`** — the Machine's `connection.host` isn't a key under
   `nodes:`.
 * **502 / `set poe_mode… `** — the UniFi call failed; the log has the controller's
