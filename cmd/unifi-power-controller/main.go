@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,13 +18,22 @@ import (
 	"github.com/conallob/unifi-power-controller/internal/config"
 	"github.com/conallob/unifi-power-controller/internal/power"
 	"github.com/conallob/unifi-power-controller/internal/server"
+	"github.com/conallob/unifi-power-controller/internal/version"
 )
 
 func main() {
 	cfgPath := flag.String("config", "/etc/unifi-power-controller/config.yaml", "path to config file")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
+
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	v, c, d := version.Fields()
+	log.Info("starting", "version", v, "commit", c, "built", d)
 	if err := run(*cfgPath, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)

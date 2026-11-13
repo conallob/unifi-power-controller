@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: unifi-power-controller
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: unifi-power-controller
+    main: ./cmd/unifi-power-controller
+    binary: unifi-power-controller
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # Embeds the release metadata read by -version and logged at startup
+    # (see internal/version).
+    ldflags:
+      - -s -w
+      - -X github.com/conallob/unifi-power-controller/internal/version.Version={{ .Version }}
+      - -X github.com/conallob/unifi-power-controller/internal/version.Commit={{ .Commit }}
+      - -X github.com/conallob/unifi-power-controller/internal/version.Date={{ .Date }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - config.example.yaml
+      - docs/tinkerbell.md
+
+checksum:
+  name_template: checksums.txt
+
+dockers_v2:
+  - id: image
+    ids: [unifi-power-controller]
+    images:
+      - ghcr.io/conallob/unifi-power-controller
+    tags:
+      - "{{ .Version }}"
+      - latest
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.source: "https://github.com/conallob/unifi-power-controller"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.licenses: BSD-3-Clause
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs?:"
+      - "^test:"
+      - "^ci:"
+      - "Merge (pull request|branch)"
+
+release:
+  # v1.2.3-rc.1 style tags are published as pre-releases.
+  prerelease: auto
