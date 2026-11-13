@@ -1,0 +1,42 @@
+# Example configuration. Mount at /etc/unifi-power-controller/config.yaml
+# (or pass -config).
+listen: ":8080"
+
+# PoE is kept off for at least this long before being re-enabled, so the
+# node's supply really drops out when Tinkerbell does off -> on back to back.
+# Default 5s; "0s" disables.
+minOffTime: 5s
+
+unifi:
+  # UniFi OS console (UDM / UCG / Cloud Key Gen2+ ...). API keys are a
+  # UniFi OS feature; this is the console's address, not the :8443 legacy port.
+  url: https://192.168.1.1
+  site: default
+  # The API key is read from here, or from $UNIFI_API_KEY if set.
+  apiKeyFile: /etc/unifi-power-controller/secret/api-key
+  # Consoles usually present a self-signed certificate.
+  insecureSkipVerify: true
+
+# Optional: HMAC-authenticate POST /rpc (Tinkerbell/Rufio). Each file holds one
+# shared secret; list several to rotate. Strongly recommended.
+rpc:
+  hmacSHA256Files:
+    - /etc/unifi-power-controller/rpc-hmac/secret
+  # Mirror Rufio's signature.includedPayloadHeaders. Signing the timestamp
+  # header stops a captured request being altered; use at most one header
+  # (bmclib's ordering of several is unspecified).
+  # signedHeaders: ["X-BMCLIB-Timestamp"]
+
+switches:
+  shack:
+    mac: "0c:ea:14:64:fb:8f"
+
+# The node name is also the "host" Rufio sends, so name nodes after the
+# Machine's spec.connection.host.
+nodes:
+  lab-node-1: {switch: shack, port: 1}
+  lab-node-2: {switch: shack, port: 2}
+  lab-node-3: {switch: shack, port: 3}
+  lab-node-4: {switch: shack, port: 4}
+  lab-node-5: {switch: shack, port: 5}
+  lab-node-6: {switch: shack, port: 6}

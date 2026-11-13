@@ -1,0 +1,70 @@
+# Reference manifests. Adapt names/namespace to your GitOps layout. Secrets are
+# referenced, not defined: create `unifi-power-controller-api-key` (key: api-key)
+# and `unifi-power-controller-rpc-hmac` (key: secret), e.g. via ExternalSecrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unifi-power-controller
+data:
+  config.yaml: |
+    minOffTime: 5s
+    unifi:
+      url: https://192.168.1.1
+      apiKeyFile: /etc/unifi-power-controller/secret/api-key
+      insecureSkipVerify: true
+    rpc:
+      hmacSHA256Files: [/etc/unifi-power-controller/rpc-hmac/secret]
+    switches:
+      shack: {mac: "0c:ea:14:64:fb:8f"}
+    nodes:
+      lab-node-1: {switch: shack, port: 1}
+      lab-node-2: {switch: shack, port: 2}
+      lab-node-3: {switch: shack, port: 3}
+      lab-node-4: {switch: shack, port: 4}
+      lab-node-5: {switch: shack, port: 5}
+      lab-node-6: {switch: shack, port: 6}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unifi-power-controller
+spec:
+  replicas: 1 # keep at 1: port_overrides updates are serialised in-process
+  selector:
+    matchLabels: {app: unifi-power-controller}
+  template:
+    metadata:
+      labels: {app: unifi-power-controller}
+    spec:
+      containers:
+        - name: unifi-power-controller
+          image: ghcr.io/conallob/unifi-power-controller:latest # TODO: publish image
+          args: ["-config=/etc/unifi-power-controller/config.yaml"]
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - {name: config, mountPath: /etc/unifi-power-controller/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: api-key, mountPath: /etc/unifi-power-controller/secret, readOnly: true}
+            - {name: rpc-hmac, mountPath: /etc/unifi-power-controller/rpc-hmac, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: unifi-power-controller}
+        - name: api-key
+          secret: {secretName: unifi-power-controller-api-key}
+        - name: rpc-hmac
+          secret: {secretName: unifi-power-controller-rpc-hmac}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unifi-power-controller
+spec:
+  type: ClusterIP
+  selector: {app: unifi-power-controller}
+  ports:
+    - {name: http, port: 80, targetPort: http}
