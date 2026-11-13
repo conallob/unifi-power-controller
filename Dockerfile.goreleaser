@@ -1,0 +1,7 @@
+# Used by GoReleaser (.goreleaser.yaml): packages the already-built, already
+# version-stamped binary. For a from-source build, use the plain Dockerfile.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/unifi-power-controller /unifi-power-controller
+EXPOSE 8080
+ENTRYPOINT ["/unifi-power-controller"]

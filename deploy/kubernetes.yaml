@@ -38,7 +38,7 @@ spec:
     spec:
       containers:
         - name: unifi-power-controller
-          image: ghcr.io/conallob/unifi-power-controller:latest # TODO: publish image
+          image: ghcr.io/conallob/unifi-power-controller:latest # pin a released version tag, e.g. :0.1.0
           args: ["-config=/etc/unifi-power-controller/config.yaml"]
           ports:
             - {name: http, containerPort: 8080}
