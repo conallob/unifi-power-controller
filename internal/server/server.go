@@ -46,12 +46,30 @@ type Options struct {
 
 	// Metrics, if set, is served at GET /metrics.
 	Metrics http.Handler
+	// Recorder, if set, counts requests and PoE actions.
+	Recorder Recorder
 }
+
+// Recorder counts requests. Label values are normalised by the implementation.
+type Recorder interface {
+	// RPC records a POST /rpc request: its method and one of
+	// ok, error, unauthorized, bad_request.
+	RPC(method, result string)
+	// Action records a PoE action (on, off, cycle) for a node and its outcome
+	// (success, error, unknown_node).
+	Action(node, action, result string)
+}
+
+type noopRecorder struct{}
+
+func (noopRecorder) RPC(string, string)            {}
+func (noopRecorder) Action(string, string, string) {}
 
 // Server is an http.Handler.
 type Server struct {
 	opts Options
 	log  *slog.Logger
+	rec  Recorder
 	mux  *http.ServeMux
 }
 
@@ -62,6 +80,9 @@ func New(o Options) *Server {
 	s := &Server{opts: o, log: o.Logger, mux: http.NewServeMux()}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
+	}
+	if s.rec = o.Recorder; s.rec == nil {
+		s.rec = noopRecorder{}
 	}
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	s.mux.HandleFunc("GET /nodes/{name}/power", s.getPower)
@@ -86,25 +107,41 @@ func (s *Server) postPower(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	var err error
 	switch body.Action {
-	case "on":
-		err = s.opts.Power.On(r.Context(), node)
-	case "off":
-		err = s.opts.Power.Off(r.Context(), node)
-	case "cycle":
-		err = s.opts.Power.Cycle(r.Context(), node)
+	case "on", "off", "cycle":
 	default:
 		http.Error(w, "action must be on, off, or cycle", http.StatusBadRequest)
 		return
 	}
-	if err != nil {
+	if err := s.act(r.Context(), node, body.Action); err != nil {
 		s.log.Error("power action failed", "node", node, "action", body.Action, "err", err)
 		http.Error(w, err.Error(), statusFor(err))
 		return
 	}
 	s.log.Info("power action", "node", node, "action", body.Action)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// act performs a PoE action and counts it. action must be on, off or cycle.
+func (s *Server) act(ctx context.Context, node, action string) error {
+	var err error
+	switch action {
+	case "on":
+		err = s.opts.Power.On(ctx, node)
+	case "off":
+		err = s.opts.Power.Off(ctx, node)
+	case "cycle":
+		err = s.opts.Power.Cycle(ctx, node)
+	}
+	result := "success"
+	switch {
+	case errors.Is(err, power.ErrUnknownNode):
+		result = "unknown_node"
+	case err != nil:
+		result = "error"
+	}
+	s.rec.Action(node, action, result)
+	return err
 }
 
 func (s *Server) getPower(w http.ResponseWriter, r *http.Request) {
@@ -161,20 +198,24 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.verify(r, body) {
 		s.log.Warn("rpc: bad or missing signature", "remote", r.RemoteAddr)
+		s.rec.RPC("unknown", "unauthorized") // method is unauthenticated input; don't trust it as a label
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		s.rec.RPC("unknown", "bad_request")
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	resp := rpcResponse{ID: req.ID, Host: req.Host}
 	result, rerr := s.dispatch(r.Context(), req)
 	if rerr != nil {
+		s.rec.RPC(req.Method, "error")
 		resp.Error = rerr
 		s.log.Error("rpc failed", "host", req.Host, "method", req.Method, "code", rerr.Code, "msg", rerr.Message)
 	} else {
+		s.rec.RPC(req.Method, "ok")
 		resp.Result = result
 		s.log.Info("rpc", "host", req.Host, "method", req.Method, "params", string(req.Params))
 	}
@@ -200,20 +241,20 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (any, *rpcError) 
 		if err := json.Unmarshal(req.Params, &p); err != nil || p.State == "" {
 			return nil, &rpcError{codeInvalid, "params.state is required"}
 		}
-		var err error
+		var action string
 		switch strings.ToLower(p.State) {
 		case "on":
-			err = s.opts.Power.On(ctx, req.Host)
+			action = "on"
 		case "off", "hardoff", "hard-off":
-			err = s.opts.Power.Off(ctx, req.Host)
+			action = "off"
 		case "cycle", "reset":
 			// PoE has no soft reset; a hard cycle is the closest equivalent.
-			err = s.opts.Power.Cycle(ctx, req.Host)
+			action = "cycle"
 		default:
 			// "soft" needs an OS or BMC; a PoE port can only cut power.
 			return nil, &rpcError{codeUnsupported, "unsupported power state: " + p.State}
 		}
-		if err != nil {
+		if err := s.act(ctx, req.Host, action); err != nil {
 			return nil, toRPCError(err)
 		}
 		return "ok", nil
