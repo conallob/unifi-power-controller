@@ -277,18 +277,58 @@ func toRPCError(err error) *rpcError {
 	return &rpcError{codeBackend, err.Error()}
 }
 
-// verify checks the bmclib HMAC signature headers. The signed payload is the
-// request body followed by the values of any configured SignedHeaders.
+// bmcSignatureSchemes are the header-name/payload conventions this server
+// accepts for POST /rpc. bmclib's generic "rpc" provider defaults to
+// X-BMCLIB-Signature-{256,512} over the body alone, but Rufio (Tinkerbell's
+// BMC controller) never uses that default: it hardcodes its own names and
+// always includes a timestamp header in the signed payload (see
+// tinkerbell/tinkerbell's rufio/internal/controller/client.go,
+// translateRPC, which merges these over whatever a Machine's
+// providerOptions.rpc.signature sets, with mergo.WithOverride -- so a
+// Machine spec cannot opt back into bmclib's own defaults). Real-world
+// Rufio traffic is the X-Rufio-* scheme below; the X-BMCLIB-* scheme is
+// kept for direct bmclib callers that don't go through Rufio.
+var bmcSignatureSchemes = []struct {
+	sigHeaderPrefix string
+	// timestampHeader, if non-empty, is appended (its raw header value, no
+	// delimiter) to the body before signing -- mirroring bmclib's
+	// createSignaturePayload, which concatenates included-header values
+	// directly onto the body.
+	timestampHeader string
+}{
+	{"X-BMCLIB-Signature", ""},
+	{"X-Rufio-Signature", "X-Rufio-Timestamp"},
+}
+
+// verify checks the request against every scheme in bmcSignatureSchemes,
+// plus any explicitly configured SignedHeaders appended to the body under
+// the X-BMCLIB-Signature header name (for operators who've set bmclib's
+// own SignedHeaders config directly on a non-Rufio consumer).
 func (s *Server) verify(r *http.Request, body []byte) bool {
 	if len(s.opts.SHA256Secrets) == 0 && len(s.opts.SHA512Secrets) == 0 {
 		return true
 	}
-	payload := append([]byte(nil), body...)
-	for _, h := range s.opts.SignedHeaders {
-		payload = append(payload, strings.Join(r.Header.Values(h), "")...)
+	for _, scheme := range bmcSignatureSchemes {
+		payload := body
+		if scheme.timestampHeader != "" {
+			payload = append(append([]byte(nil), body...), []byte(r.Header.Get(scheme.timestampHeader))...)
+		}
+		if matches(r.Header.Get(scheme.sigHeaderPrefix+"-256"), payload, s.opts.SHA256Secrets, sha256.New) ||
+			matches(r.Header.Get(scheme.sigHeaderPrefix+"-512"), payload, s.opts.SHA512Secrets, sha512.New) {
+			return true
+		}
 	}
-	return matches(r.Header.Get("X-BMCLIB-Signature-256"), payload, s.opts.SHA256Secrets, sha256.New) ||
-		matches(r.Header.Get("X-BMCLIB-Signature-512"), payload, s.opts.SHA512Secrets, sha512.New)
+	if len(s.opts.SignedHeaders) > 0 {
+		payload := append([]byte(nil), body...)
+		for _, h := range s.opts.SignedHeaders {
+			payload = append(payload, strings.Join(r.Header.Values(h), "")...)
+		}
+		if matches(r.Header.Get("X-BMCLIB-Signature-256"), payload, s.opts.SHA256Secrets, sha256.New) ||
+			matches(r.Header.Get("X-BMCLIB-Signature-512"), payload, s.opts.SHA512Secrets, sha512.New) {
+			return true
+		}
+	}
+	return false
 }
 
 // matches reports whether any comma-separated signature in header equals the

@@ -186,6 +186,45 @@ func TestRPCSignature(t *testing.T) {
 	}
 }
 
+// TestRPCSignatureRufio covers the header names and payload Rufio (not
+// vanilla bmclib) actually sends: X-Rufio-Signature-{256,512}, with
+// X-Rufio-Timestamp's raw value appended to the body before signing.
+// tinkerbell/tinkerbell's rufio/internal/controller/client.go hardcodes
+// these via mergo.WithOverride, so a Machine's providerOptions.rpc can't
+// opt back into bmclib's own X-BMCLIB-* defaults -- real Rufio traffic
+// always looks like this.
+func TestRPCSignatureRufio(t *testing.T) {
+	body := `{"id":1,"host":"n","method":"ping"}`
+	h := New(Options{Power: &fakePower{}, SHA256Secrets: []string{"s"}})
+	ts := "2026-11-11T12:00:00Z"
+
+	ok := map[string]string{"X-Rufio-Timestamp": ts, "X-Rufio-Signature-256": sign(body, ts, "s")}
+	if rr := do(h, "POST", "/rpc", body, ok); rr.Code != 200 {
+		t.Fatalf("rufio signed code %d", rr.Code)
+	}
+
+	// Altering the timestamp without re-signing must fail: it's part of the
+	// signed payload, not just an informational header.
+	altered := map[string]string{"X-Rufio-Timestamp": "2026-11-11T12:00:01Z", "X-Rufio-Signature-256": sign(body, ts, "s")}
+	if rr := do(h, "POST", "/rpc", body, altered); rr.Code != 401 {
+		t.Fatalf("rufio altered timestamp code %d", rr.Code)
+	}
+
+	// Wrong secret still fails.
+	wrong := map[string]string{"X-Rufio-Timestamp": ts, "X-Rufio-Signature-256": sign(body, ts, "wrong")}
+	if rr := do(h, "POST", "/rpc", body, wrong); rr.Code != 401 {
+		t.Fatalf("rufio wrong secret code %d", rr.Code)
+	}
+
+	// Rotated secrets and multiple comma-separated signatures work the same
+	// as the X-BMCLIB-* scheme.
+	hh := New(Options{Power: &fakePower{}, SHA256Secrets: []string{"old", "new"}})
+	multi := sign(body, ts, "rotated-out") + "," + sign(body, ts, "new")
+	if rr := do(hh, "POST", "/rpc", body, map[string]string{"X-Rufio-Timestamp": ts, "X-Rufio-Signature-256": multi}); rr.Code != 200 {
+		t.Fatalf("rufio multi-sig code %d", rr.Code)
+	}
+}
+
 func TestMetricsRoute(t *testing.T) {
 	// Not mounted unless configured.
 	if rr := do(New(Options{Power: &fakePower{}}), "GET", "/metrics", "", nil); rr.Code != 404 {
