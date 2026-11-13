@@ -60,7 +60,7 @@ Releases are built by [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`) 
 git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0
 ```
 
-That publishes a GitHub release (linux/darwin × amd64/arm64 archives, `checksums.txt`,
+That publishes a GitHub release (linux amd64/arm64 archives, `checksums.txt`,
 a changelog; tags like `v0.2.0-rc.1` become pre-releases) and a multi-arch image at
 `ghcr.io/conallob/unifi-power-controller:<version>`. The version, commit and build date
 are embedded via `-ldflags -X` into `internal/version`:
