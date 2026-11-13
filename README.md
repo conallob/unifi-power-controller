@@ -110,8 +110,10 @@ increase(unifi_power_controller_power_actions_total{action="cycle"}[1h]) > 3
 # RPC traffic from Tinkerbell, by method and result
 sum by (method, result) (rate(unifi_power_controller_rpc_requests_total[5m]))
 
-# Failed PoE changes, and the failure ratio
+# Nodes with failed PoE changes
 sum by (node) (increase(unifi_power_controller_power_action_errors_total[15m])) > 0
+
+# Overall failure ratio
   sum(rate(unifi_power_controller_power_action_errors_total[15m]))
 / sum(rate(unifi_power_controller_power_actions_total{node!="unknown"}[15m]))
 ```
